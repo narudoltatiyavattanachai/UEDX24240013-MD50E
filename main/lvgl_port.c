@@ -1,3 +1,13 @@
+/*
+ * @file lvgl_port.c
+ * @brief LVGL porting implementation for ESP32
+ *
+ * This file provides the necessary functions to integrate the LVGL library
+ * with the ESP32 platform. It handles display initialization, input device
+ * (encoder and button) registration, LVGL tick generation, and task management
+ * for LVGL event handling. It also includes semaphore protection for LVGL
+ * function calls from different tasks.
+ */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -12,15 +22,27 @@
 #include "lvgl_port.h"
 
 static char *TAG = "lvgl_port";
+// LVGL display driver
 static lv_disp_drv_t disp_drv;
+// LVGL input device driver (encoder)
 static lv_indev_drv_t indev_drv;
+// Handle for the LVGL task
 static TaskHandle_t task = NULL;
+// Semaphore for protecting LVGL API calls
 static SemaphoreHandle_t sem_lock = NULL;
 
+// Forward declarations for static functions
 static void display_init(lvgl_port_config_t *config);
 static void tick_init(uint8_t period);
 static void lvgl_task(void *arg);
 
+/**
+ * @brief Takes the LVGL semaphore.
+ *
+ * This function is used to protect LVGL API calls from concurrent access.
+ * It should be called before any LVGL function if the calling task is not
+ * the main LVGL task. This is part of the public API.
+ */
 void lvgl_sem_take(void)
 {
     if (xTaskGetCurrentTaskHandle() != task) {
@@ -28,6 +50,13 @@ void lvgl_sem_take(void)
     }
 }
 
+/**
+ * @brief Gives the LVGL semaphore.
+ *
+ * This function releases the LVGL semaphore, allowing other tasks to access
+ * LVGL APIs. It should be called after an LVGL function call if the calling
+ * task is not the main LVGL task. This is part of the public API.
+ */
 void lvgl_sem_give(void)
 {
     if (xTaskGetCurrentTaskHandle() != task) {
@@ -35,6 +64,16 @@ void lvgl_sem_give(void)
     }
 }
 
+/**
+ * @brief Reads the encoder state for LVGL.
+ *
+ * This function is registered as the read callback for the LVGL input device
+ * driver. It reads the encoder's accumulated value and the state of its
+ * associated button, then populates the `lv_indev_data_t` structure.
+ *
+ * @param indev_drv Pointer to the LVGL input device driver.
+ * @param data Pointer to the `lv_indev_data_t` structure to store the read data.
+ */
 static void encoder_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
 {
     static int32_t last_v = 0;
@@ -46,6 +85,12 @@ static void encoder_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     last_v = invd;
 }
 
+/**
+ * @brief Initializes the input device (encoder and button) for LVGL.
+ *
+ * This function initializes the BSP for the encoder and button, then
+ * registers an LVGL input device driver for the encoder.
+ */
 static void indev_init(void)
 {
     bsp_encoder_init(BSP_ENCODER_A_PIN_NUM, BSP_ENCODER_B_PIN_NUM);
@@ -58,6 +103,15 @@ static void indev_init(void)
     lv_indev_drv_register(&indev_drv);
 }
 
+/**
+ * @brief Initializes the LVGL port.
+ *
+ * This function initializes LVGL itself, the display, input devices, and the
+ * LVGL tick. It also creates a FreeRTOS task to handle LVGL events.
+ * This is part of the public API.
+ *
+ * @param config Pointer to the LVGL port configuration structure.
+ */
 void lvgl_port(lvgl_port_config_t *config)
 {
     lv_init();
@@ -74,6 +128,19 @@ void lvgl_port(lvgl_port_config_t *config)
     ESP_LOGI(TAG, "Finish init");
 }
 
+/**
+ * @brief LVGL display flush callback.
+ *
+ * This function is registered as the `flush_cb` for the LVGL display driver.
+ * It is called by LVGL when a region of the display needs to be redrawn.
+ * It uses the BSP LCD functions to draw the bitmap to the display.
+ * If `full_refresh` is enabled in the display driver, it waits for the
+ * `flush_ready` signal from the TE line (if configured).
+ *
+ * @param drv Pointer to the LVGL display driver.
+ * @param area Pointer to the area to be flushed.
+ * @param color_p Pointer to the color data buffer.
+ */
 static void flush_cb(struct _lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_p)
 {
     if (drv->full_refresh) {
@@ -88,12 +155,31 @@ static void flush_cb(struct _lv_disp_drv_t *drv, const lv_area_t *area, lv_color
     esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_p);
 }
 
+/**
+ * @brief Callback for LCD transaction done.
+ *
+ * This function is registered with the BSP LCD module. It is called when an
+ * LCD transaction (e.g., drawing a bitmap) is complete. It signals LVGL
+ * that the flush operation is ready.
+ *
+ * @param args User arguments (not used in this implementation).
+ * @return true to indicate that a higher priority task has been woken.
+ */
 static bool trans_done_cb(void *args)
 {
     lv_disp_flush_ready(&disp_drv);
     return true;
 }
 
+/**
+ * @brief Initializes the display for LVGL.
+ *
+ * This function initializes the BSP LCD, allocates display buffers (draw buffers)
+ * for LVGL, and registers the LVGL display driver with the appropriate
+ * callbacks and settings.
+ *
+ * @param config Pointer to the LVGL port configuration structure.
+ */
 static void display_init(lvgl_port_config_t *config)
 {
     esp_lcd_panel_handle_t panel_handle = bsp_lcd_init();
@@ -114,12 +200,28 @@ static void display_init(lvgl_port_config_t *config)
     bsp_lcd_trans_done_cb_register(trans_done_cb);
 }
 
+/**
+ * @brief LVGL tick increment function.
+ *
+ * This function is called periodically by an ESP timer to increment the LVGL
+ * tick counter.
+ *
+ * @param arg The period of the tick in milliseconds, passed as a void pointer.
+ */
 static void tick_inc(void *arg)
 {
     uint8_t period = (uint8_t)arg;
     lv_tick_inc(period);
 }
 
+/**
+ * @brief Initializes the LVGL tick system.
+ *
+ * This function creates and starts an ESP timer that periodically calls
+ * `tick_inc` to provide a time base for LVGL.
+ *
+ * @param period The period of the LVGL tick in milliseconds.
+ */
 static void tick_init(uint8_t period)
 {
     esp_timer_handle_t timer;
@@ -134,6 +236,17 @@ static void tick_init(uint8_t period)
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, period * 1000));
 }
 
+/**
+ * @brief Main LVGL task.
+ *
+ * This FreeRTOS task is responsible for calling `lv_timer_handler()`
+ * periodically. This function handles LVGL's internal tasks, such as
+ * animation and event processing. The task is protected by a semaphore
+ * to ensure thread-safe access to LVGL APIs.
+ *
+ * @param arg The period for calling `lv_timer_handler()` in milliseconds,
+ *            passed as a void pointer.
+ */
 static void lvgl_task(void *arg)
 {
     uint8_t period = (uint8_t)arg;

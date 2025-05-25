@@ -1,3 +1,13 @@
+/*
+ * @file ui.c
+ * @brief Core UI management and LVGL group handling
+ *
+ * This file provides the basic initialization for the user interface,
+ * primarily focusing on setting up LVGL input device groups, specifically
+ * for encoder-based navigation. It offers utility functions to add and
+ * remove UI objects from the main encoder group, facilitating focus
+ * management within different UI screens or components.
+ */
 #include <stdio.h>
 #include "esp_system.h"
 #ifdef ESP_IDF_VERSION
@@ -11,8 +21,18 @@
 #include <math.h>
 
 static const char *TAG = "ui";
+// Global LVGL group, primarily for encoder input
 static lv_group_t *group;
 
+/**
+ * @brief Initializes the core UI components.
+ *
+ * This function creates a default LVGL group and associates it with the
+ * first available input device if it's an encoder. This group is then
+ * used for managing focus for navigable UI elements. It also calls
+ * `ui_menu_init()` to initialize the main menu UI.
+ * This is part of the public API.
+ */
 void ui_init(void)
 {
     group = lv_group_create();
@@ -37,11 +57,26 @@ void ui_init(void)
     ui_menu_init();
 }
 
+/**
+ * @brief Adds an LVGL object to the main encoder input group.
+ *
+ * This function allows UI elements to be made focusable and navigable
+ * via the encoder. This is part of the public API.
+ *
+ * @param obj Pointer to the LVGL object to be added to the group.
+ */
 void ui_add_obj_to_encoder_group(lv_obj_t *obj)
 {
     lv_group_add_obj(group, obj);
 }
 
+/**
+ * @brief Removes all objects from the main encoder input group.
+ *
+ * This function is typically used when changing UI screens or contexts,
+ * to clear the previous set of focusable objects.
+ * This is part of the public API.
+ */
 void ui_remove_all_objs_from_encoder_group(void)
 {
     lv_group_remove_all_objs(group);

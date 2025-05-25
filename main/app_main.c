@@ -1,6 +1,14 @@
-/* Hello World Example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
+/*
+ * @file app_main.c
+ * @brief Main application entry point for the ESP32-based LVGL UI project.
+ *
+ * This file contains the primary `app_main` function that initializes the
+ * system, including NVS, LVGL, the display, input devices, and the user
+ * interface. It also includes optional memory and task monitoring utilities.
+ *
+ * Original Example Note (for context, not part of this project's direct purpose):
+ * Hello World Example
+ * This example code is in the Public Domain (or CC0 licensed, at your option.)
 
    Unless required by applicable law or agreed to in writing, this
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
@@ -26,34 +34,36 @@
 static const char *TAG = "main";
 
 
-#define MEMORY_MONITOR 1
+#define MEMORY_MONITOR 1 // Switch to enable/disable memory and task monitoring
 
 #if MEMORY_MONITOR
 
-#define ARRAY_SIZE_OFFSET   5   //Increase this if print_real_time_stats returns ESP_ERR_INVALID_SIZE
+#define ARRAY_SIZE_OFFSET   5   // Increase this if print_real_time_stats returns ESP_ERR_INVALID_SIZE
 
 /**
- * @brief   Function to print the CPU usage of tasks over a given duration.
+ * @brief Prints real-time CPU usage statistics for FreeRTOS tasks.
  *
- * This function will measure and print the CPU usage of tasks over a specified
- * number of ticks (i.e. real time stats). This is implemented by simply calling
- * uxTaskGetSystemState() twice separated by a delay, then calculating the
- * differences of task run times before and after the delay.
+ * This function measures and prints the CPU usage of tasks over a specified
+ * duration (`xTicksToWait`). It calls `uxTaskGetSystemState()` twice, separated
+ * by the delay, and then calculates the differences in task run times to
+ * determine CPU usage percentages.
  *
- * @note    If any tasks are added or removed during the delay, the stats of
- *          those tasks will not be printed.
- * @note    This function should be called from a high priority task to minimize
- *          inaccuracies with delays.
- * @note    When running in dual core mode, each core will correspond to 50% of
- *          the run time.
+ * @note If tasks are added or removed during the measurement period, their
+ *       stats might not be accurately reported or printed as "deleted" or "created".
+ * @note This function should ideally be called from a high-priority task to
+ *       minimize measurement inaccuracies caused by its own execution delay.
+ * @note In dual-core mode, CPU usage is reported per core (e.g., 50% represents
+ *       full utilization of one core).
  *
- * @param   xTicksToWait    Period of stats measurement
+ * @param xTicksToWait The period, in FreeRTOS ticks, over which to measure task statistics.
  *
  * @return
- *  - ESP_OK                Success
- *  - ESP_ERR_NO_MEM        Insufficient memory to allocated internal arrays
- *  - ESP_ERR_INVALID_SIZE  Insufficient array size for uxTaskGetSystemState. Trying increasing ARRAY_SIZE_OFFSET
- *  - ESP_ERR_INVALID_STATE Delay duration too short
+ *  - ESP_OK: Successfully printed the statistics.
+ *  - ESP_ERR_NO_MEM: Insufficient memory to allocate internal arrays for task statuses.
+ *  - ESP_ERR_INVALID_SIZE: Insufficient array size provided to `uxTaskGetSystemState()`.
+ *    Try increasing `ARRAY_SIZE_OFFSET`.
+ *  - ESP_ERR_INVALID_STATE: The delay duration `xTicksToWait` was too short,
+ *    resulting in no measurable time difference.
  */
 static esp_err_t print_real_time_stats(TickType_t xTicksToWait)
 {
@@ -139,6 +149,16 @@ exit:    //Common return path
     return ret;
 }
 
+/**
+ * @brief FreeRTOS task for monitoring system resources.
+ *
+ * This task periodically prints system memory usage (free internal RAM,
+ * free SPIRAM, largest free blocks, minimum ever free sizes) and
+ * real-time task CPU utilization statistics (using `print_real_time_stats`).
+ * The monitoring interval is defined by `STATS_TICKS`.
+ *
+ * @param arg Unused task parameter.
+ */
 static void monitor_task(void *arg)
 {
     (void) arg;
@@ -170,13 +190,38 @@ static void monitor_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief Starts the system monitoring task.
+ *
+ * This function creates and pins the `monitor_task` to a specific core (core 0).
+ * The task is given a high priority (configMAX_PRIORITIES - 3).
+ * It checks for successful task creation.
+ */
 static void sys_monitor_start(void)
 {
     BaseType_t ret_val = xTaskCreatePinnedToCore(monitor_task, "Monitor Task", 4 * 1024, NULL, configMAX_PRIORITIES - 3, NULL, 0);
     ESP_ERROR_CHECK_WITHOUT_ABORT((pdPASS == ret_val) ? ESP_OK : ESP_FAIL);
 }
-#endif
+#endif // MEMORY_MONITOR
 
+/**
+ * @brief Main application entry point.
+ *
+ * This is the first function called after the FreeRTOS scheduler starts.
+ * It performs the following key steps:
+ * 1. Initializes the Non-Volatile Storage (NVS) flash memory, erasing it
+ *    if it's corrupted or a new version is found.
+ * 2. Configures and initializes the LVGL port, including display settings,
+ *    tick period, and LVGL task parameters.
+ * 3. If `MEMORY_MONITOR` is enabled, it starts the system monitoring task.
+ * 4. Initializes the main User Interface (UI) by calling `ui_init()`. This
+ *    call is protected by LVGL semaphores (`lvgl_sem_take`/`lvgl_sem_give`)
+ *    to ensure thread safety if other tasks were to interact with LVGL
+ *    concurrently (though not typical at this stage of init).
+ * 5. Sets the LCD backlight brightness to 100% after a short delay.
+ *
+ * @note This function does not return.
+ */
 void app_main(void)
 {
     ESP_LOGI(TAG, "Compile time: %s %s", __DATE__, __TIME__);

@@ -1,6 +1,12 @@
 /*
- * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+ * @file lcd_panel_gc9a01.c
+ * @brief GC9A01 LCD panel driver implementation
  *
+ * This file provides the driver for the GC9A01 LCD panel, including
+ * initialization, drawing, and control functions. It implements the
+ * esp_lcd_panel_interface.h API for ESP-IDF.
+ *
+ * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -20,6 +26,7 @@
 
 static const char *TAG = "lcd_panel.gc9a01";
 
+// Forward declarations for static (internal) panel operation functions
 static esp_err_t panel_gc9a01_del(esp_lcd_panel_t *panel);
 static esp_err_t panel_gc9a01_reset(esp_lcd_panel_t *panel);
 static esp_err_t panel_gc9a01_init(esp_lcd_panel_t *panel);
@@ -43,9 +50,27 @@ typedef struct {
     int y_gap;
     unsigned int bits_per_pixel;
     uint8_t madctl_val; // save current value of LCD_CMD_MADCTL register
-    uint8_t colmod_cal; // save surrent value of LCD_CMD_COLMOD register
+    uint8_t colmod_cal; // save current value of LCD_CMD_COLMOD register
 } gc9a01_panel_t;
 
+/**
+ * @brief Create a new GC9A01 LCD panel.
+ *
+ * This function allocates and initializes a new GC9A01 panel structure.
+ * It configures GPIO for reset, sets up color space and pixel format,
+ * and registers panel operation functions. This is part of the public API,
+ * intended to be called by the BSP or application to initialize the LCD driver.
+ *
+ * @param io Handle to the LCD panel IO interface.
+ * @param panel_dev_config Pointer to the panel device configuration structure.
+ * @param ret_panel Pointer to receive the handle of the new panel.
+ * @return
+ *     - ESP_OK: Success
+ *     - ESP_ERR_INVALID_ARG: If any argument is invalid.
+ *     - ESP_ERR_NO_MEM: If memory allocation fails.
+ *     - ESP_ERR_NOT_SUPPORTED: If the color space or pixel width is not supported.
+ *     - Other ESP_ERR codes from lower-level functions.
+ */
 esp_err_t lcd_new_panel_gc9a01(const esp_lcd_panel_io_handle_t io, const esp_lcd_panel_dev_config_t *panel_dev_config, esp_lcd_panel_handle_t *ret_panel)
 {
 #if CONFIG_LCD_ENABLE_DEBUG_LOG
@@ -121,6 +146,18 @@ err:
     return ret;
 }
 
+/**
+ * @brief Delete a GC9A01 LCD panel.
+ *
+ * This function frees the resources associated with a GC9A01 panel,
+ * including resetting the reset GPIO pin if used. This function is
+ * registered as part of the esp_lcd_panel_t structure and called when
+ * esp_lcd_panel_del() is invoked.
+ *
+ * @param panel Handle to the panel to be deleted.
+ * @return
+ *     - ESP_OK: Success
+ */
 static esp_err_t panel_gc9a01_del(esp_lcd_panel_t *panel)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -133,6 +170,17 @@ static esp_err_t panel_gc9a01_del(esp_lcd_panel_t *panel)
     return ESP_OK;
 }
 
+/**
+ * @brief Reset the GC9A01 LCD panel.
+ *
+ * This function performs a hardware reset if a reset GPIO is configured,
+ * otherwise it performs a software reset using the LCD_CMD_SWRESET command.
+ * This function is registered as part of the esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel to be reset.
+ * @return
+ *     - ESP_OK: Success
+ */
 static esp_err_t panel_gc9a01_reset(esp_lcd_panel_t *panel)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -152,12 +200,16 @@ static esp_err_t panel_gc9a01_reset(esp_lcd_panel_t *panel)
     return ESP_OK;
 }
 
+/**
+ * @brief Structure to define an LCD initialization command.
+ */
 typedef struct {
-    uint8_t cmd;
-    uint8_t data[16];
-    uint8_t data_bytes; // Length of data in above data array; 0xFF = end of cmds.
+    uint8_t cmd;           /*!< LCD command */
+    uint8_t data[16];      /*!< Command data */
+    uint8_t data_bytes;    /*!< Number of data bytes; 0xFF terminates the command list */
 } lcd_init_cmd_t;
 
+// Array of initialization commands for the GC9A01 LCD panel
 static const lcd_init_cmd_t vendor_specific_init[] = {
     // Enable Inter Register
     {0xfe, {0x00}, 0},
@@ -177,8 +229,8 @@ static const lcd_init_cmd_t vendor_specific_init[] = {
     {0x8d, {0x03}, 1},
     {0xB5, {0x08, 0x09, 0x14, 0x08}, 4},
     {0xB6, {0x00, 0x00}, 2},
-    {0x36, {0x48}, 1},
-    {0x3a, {0x05}, 1},
+    {0x36, {0x48}, 1}, // MADCTL: MX, BGR
+    {0x3a, {0x05}, 1}, // COLMOD: 16-bit/pixel (RGB565)
     {0x90, {0x08, 0x08, 0x08, 0x08}, 4},
     {0xbd, {0x06}, 1},
     {0xba, {0x01}, 1},
@@ -190,10 +242,10 @@ static const lcd_init_cmd_t vendor_specific_init[] = {
     {0xbe, {0x11}, 1},
     {0xe1, {0x10, 0x0e}, 2},
     {0xdf, {0x21, 0x0c, 0x02}, 3},
-    {0xf0, {0x45, 0x09, 0x08, 0x08, 0x26, 0x2a}, 6},
-    {0xf1, {0x43, 0x70, 0x72, 0x36, 0x37, 0x6f}, 6},
-    {0xf2, {0x45, 0x09, 0x08, 0x08, 0x26, 0x2a}, 6},
-    {0xf3, {0x43, 0x70, 0x72, 0x36, 0x37, 0x6f}, 6},
+    {0xf0, {0x45, 0x09, 0x08, 0x08, 0x26, 0x2a}, 6}, // Gamma Curve Related
+    {0xf1, {0x43, 0x70, 0x72, 0x36, 0x37, 0x6f}, 6}, // Gamma Curve Related
+    {0xf2, {0x45, 0x09, 0x08, 0x08, 0x26, 0x2a}, 6}, // Gamma Curve Related
+    {0xf3, {0x43, 0x70, 0x72, 0x36, 0x37, 0x6f}, 6}, // Gamma Curve Related
     {0xed, {0x1b, 0x0b}, 2},
     {0xae, {0x77}, 1},
     {0xcd, {0x63}, 1},
@@ -207,17 +259,28 @@ static const lcd_init_cmd_t vendor_specific_init[] = {
     {0x74, {0x10, 0x85, 0x80, 0x00, 0x00, 0x4e, 0x00}, 7},
     {0x98, {0x3e, 0x07}, 2},
     {0x99, {0x3e, 0x07}, 2},
-    {0x35, {0x00}, 1},
-    {0x44, {0x00, 0x4a}, 2},
-    {0x21, {0x00}, 0},
-    {0x2a, {0x00, 0x00, 0x00, 0xef}, 4},
-    {0x2b, {0x00, 0x00, 0x00, 0xef}, 4},
-    {0x2c, {0x00}, 0},
-    {0x11, {0x00}, 0},
-    {0x29, {0x00}, 0},
-    {0, {0}, 0xff},
+    {0x35, {0x00}, 1}, // Tearing Effect Line ON, V-blanking only
+    {0x44, {0x00, 0x4a}, 2}, // Set Tear Scanline
+    {0x21, {0x00}, 0}, // Display Inversion OFF
+    {0x2a, {0x00, 0x00, 0x00, 0xef}, 4}, // Column Address Set (0 to 239)
+    {0x2b, {0x00, 0x00, 0x00, 0xef}, 4}, // Row Address Set (0 to 239)
+    {0x2c, {0x00}, 0}, // Memory Write
+    {0x11, {0x00}, 0}, // Sleep Out
+    {0x29, {0x00}, 0}, // Display ON
+    {0, {0}, 0xff},    // End of commands
 };
 
+/**
+ * @brief Initialize the GC9A01 LCD panel.
+ *
+ * This function sends a sequence of vendor-specific commands to initialize
+ * the GC9A01 panel. This function is registered as part of the
+ * esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel to be initialized.
+ * @return
+ *     - ESP_OK: Success
+ */
 static esp_err_t panel_gc9a01_init(esp_lcd_panel_t *panel)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -237,6 +300,23 @@ static esp_err_t panel_gc9a01_init(esp_lcd_panel_t *panel)
     return ESP_OK;
 }
 
+/**
+ * @brief Draw a bitmap on the GC9A01 LCD panel.
+ *
+ * This function sets the drawing window (column and row addresses) and
+ * then sends the color data to the panel's GRAM. This function is
+ * registered as part of the esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param x_start Starting X coordinate.
+ * @param y_start Starting Y coordinate.
+ * @param x_end Ending X coordinate (exclusive).
+ * @param y_end Ending Y coordinate (exclusive).
+ * @param color_data Pointer to the color data buffer.
+ * @return
+ *     - ESP_OK: Success
+ *     - Other ESP_ERR codes from lower-level IO functions.
+ */
 static esp_err_t panel_gc9a01_draw_bitmap(esp_lcd_panel_t *panel, int x_start, int y_start, int x_end, int y_end, const void *color_data)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -268,6 +348,19 @@ static esp_err_t panel_gc9a01_draw_bitmap(esp_lcd_panel_t *panel, int x_start, i
     return ESP_OK;
 }
 
+/**
+ * @brief Invert the colors of the GC9A01 LCD panel.
+ *
+ * This function sends the LCD_CMD_INVON or LCD_CMD_INVOFF command to
+ * enable or disable color inversion. This function is registered as part
+ * of the esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param invert_color_data True to invert colors, false to restore normal colors.
+ * @return
+ *     - ESP_OK: Success
+ *     - Other ESP_ERR codes from lower-level IO functions.
+ */
 static esp_err_t panel_gc9a01_invert_color(esp_lcd_panel_t *panel, bool invert_color_data)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -282,6 +375,20 @@ static esp_err_t panel_gc9a01_invert_color(esp_lcd_panel_t *panel, bool invert_c
     return ESP_OK;
 }
 
+/**
+ * @brief Mirror the display of the GC9A01 LCD panel.
+ *
+ * This function updates the MADCTL register to mirror the display along
+ * the X-axis and/or Y-axis. This function is registered as part of the
+ * esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param mirror_x True to mirror along the X-axis, false otherwise.
+ * @param mirror_y True to mirror along the Y-axis, false otherwise.
+ * @return
+ *     - ESP_OK: Success
+ *     - Other ESP_ERR codes from lower-level IO functions.
+ */
 static esp_err_t panel_gc9a01_mirror(esp_lcd_panel_t *panel, bool mirror_x, bool mirror_y)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -302,6 +409,19 @@ static esp_err_t panel_gc9a01_mirror(esp_lcd_panel_t *panel, bool mirror_x, bool
     return ESP_OK;
 }
 
+/**
+ * @brief Swap the X and Y axes of the GC9A01 LCD panel.
+ *
+ * This function updates the MADCTL register to swap the X and Y axes,
+ * effectively rotating the display. This function is registered as part
+ * of the esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param swap_axes True to swap X and Y axes, false otherwise.
+ * @return
+ *     - ESP_OK: Success
+ *     - Other ESP_ERR codes from lower-level IO functions.
+ */
 static esp_err_t panel_gc9a01_swap_xy(esp_lcd_panel_t *panel, bool swap_axes)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -317,6 +437,20 @@ static esp_err_t panel_gc9a01_swap_xy(esp_lcd_panel_t *panel, bool swap_axes)
     return ESP_OK;
 }
 
+/**
+ * @brief Set the X and Y gap (offset) for the GC9A01 LCD panel.
+ *
+ * This function sets an offset for the X and Y coordinates when drawing.
+ * This can be used to adjust for display panels that are not perfectly
+ * aligned or have a non-standard starting position. This function is
+ * registered as part of the esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param x_gap The X offset.
+ * @param y_gap The Y offset.
+ * @return
+ *     - ESP_OK: Success
+ */
 static esp_err_t panel_gc9a01_set_gap(esp_lcd_panel_t *panel, int x_gap, int y_gap)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -326,6 +460,20 @@ static esp_err_t panel_gc9a01_set_gap(esp_lcd_panel_t *panel, int x_gap, int y_g
 }
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+/**
+ * @brief Turn the GC9A01 LCD panel display on or off.
+ * (For ESP-IDF v5.0 and later)
+ *
+ * This function sends the LCD_CMD_DISPON or LCD_CMD_DISPOFF command to
+ * turn the display on or off. This function is registered as part of the
+ * esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param on_off True to turn the display on, false to turn it off.
+ * @return
+ *     - ESP_OK: Success
+ *     - Other ESP_ERR codes from lower-level IO functions.
+ */
 static esp_err_t panel_gc9a01_disp_on_off(esp_lcd_panel_t *panel, bool on_off)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);
@@ -339,7 +487,22 @@ static esp_err_t panel_gc9a01_disp_on_off(esp_lcd_panel_t *panel, bool on_off)
     esp_lcd_panel_io_tx_param(io, command, NULL, 0);
     return ESP_OK;
 }
-#else
+#else // ESP_IDF_VERSION < 5.0.0
+/**
+ * @brief Turn the GC9A01 LCD panel display on or off.
+ * (For ESP-IDF versions prior to v5.0)
+ *
+ * This function sends the LCD_CMD_DISPON or LCD_CMD_DISPOFF command to
+ * turn the display on or off. The 'off' parameter is interpreted as
+ * true for display off, false for display on. This function is registered
+ * as part of the esp_lcd_panel_t structure.
+ *
+ * @param panel Handle to the panel.
+ * @param off True to turn the display off, false to turn it on.
+ * @return
+ *     - ESP_OK: Success
+ *     - Other ESP_ERR codes from lower-level IO functions.
+ */
 static esp_err_t panel_gc9a01_disp_off(esp_lcd_panel_t *panel, bool off)
 {
     gc9a01_panel_t *gc9a01 = __containerof(panel, gc9a01_panel_t, base);

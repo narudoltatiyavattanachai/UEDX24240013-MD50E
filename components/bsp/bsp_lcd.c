@@ -1,3 +1,11 @@
+/*
+ * @file bsp_lcd.c
+ * @brief Board Support Package for LCD control
+ *
+ * This file provides the implementation for initializing and controlling the
+ * LCD display. It handles SPI communication, panel initialization, backlight
+ * control, and TE (Tearing Effect) line synchronization.
+ */
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -40,13 +48,26 @@
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 static char *TAG = "bsp_lcd";
+// Handle for the LCD panel
 static esp_lcd_panel_handle_t panel_handle = NULL;
+// Callback function for transaction done event
 static bsp_lcd_trans_done_cb_t on_trans_done = NULL;
+// Semaphore to signal when LCD flush is ready (used with TE line)
 static SemaphoreHandle_t flush_ready = NULL;
 
+// Forward declarations for static functions
 static bool bsp_lcd_on_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx);
 static void bsp_lcd_tear_gpio_isr_handler(void *arg);
 
+/**
+ * @brief Initializes the LCD panel.
+ *
+ * This function initializes the SPI bus, installs the LCD panel IO and driver (GC9A01),
+ * configures the backlight PWM, and sets up the TE (Tearing Effect) line if configured.
+ * This is part of the public API.
+ *
+ * @return esp_lcd_panel_handle_t Handle to the initialized LCD panel, or NULL on failure.
+ */
 esp_lcd_panel_handle_t bsp_lcd_init(void)
 {
     ESP_LOGI(TAG, "Initialize SPI bus");
@@ -139,11 +160,26 @@ esp_lcd_panel_handle_t bsp_lcd_init(void)
     return panel_handle;
 }
 
+/**
+ * @brief Registers a callback function to be called when a color data transaction is done.
+ *
+ * This is part of the public API.
+ *
+ * @param cb The callback function to register.
+ */
 void bsp_lcd_trans_done_cb_register(bsp_lcd_trans_done_cb_t cb)
 {
     on_trans_done = cb;
 }
 
+/**
+ * @brief Sets the brightness of the LCD backlight.
+ *
+ * This function controls the LCD backlight brightness using LEDC PWM.
+ * This is part of the public API.
+ *
+ * @param percent Brightness percentage (0-100). Values outside this range will be clamped.
+ */
 void bsp_lcd_set_brightness(uint8_t percent)
 {
     percent = (percent > 100) ? 100 : percent;
@@ -152,11 +188,29 @@ void bsp_lcd_set_brightness(uint8_t percent)
     ESP_ERROR_CHECK(ledc_set_duty_and_update(LEDC_MODE, LEDC_CHANNEL, duty, 0));
 }
 
+/**
+ * @brief Waits for the LCD flush ready signal.
+ *
+ * This function is used when the TE (Tearing Effect) line is enabled. It blocks
+ * until the TE line signals that the LCD is ready for a new frame.
+ * This is part of the public API.
+ */
 void bsp_lcd_wait_flush_ready(void)
 {
     xSemaphoreTake(flush_ready, portMAX_DELAY);
 }
 
+/**
+ * @brief Callback function invoked when a color data transaction is finished.
+ *
+ * This function is registered with the ESP LCD panel IO layer. It calls the
+ * user-registered callback `on_trans_done` if it exists.
+ *
+ * @param panel_io Handle to the panel IO.
+ * @param edata Event data.
+ * @param user_ctx User context.
+ * @return True if a high-priority task has been waken up by this callback, false otherwise.
+ */
 static bool bsp_lcd_on_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
     if (on_trans_done) {
@@ -166,6 +220,15 @@ static bool bsp_lcd_on_trans_done(esp_lcd_panel_io_handle_t panel_io, esp_lcd_pa
     return false;
 }
 
+/**
+ * @brief GPIO ISR handler for the TE (Tearing Effect) line.
+ *
+ * This ISR is triggered by the TE line from the LCD. It gives or takes a
+ * semaphore (`flush_ready`) to synchronize frame buffer flushing with the
+ * LCD's refresh cycle, preventing tearing.
+ *
+ * @param arg GPIO number that triggered the interrupt (passed during ISR registration).
+ */
 static void bsp_lcd_tear_gpio_isr_handler(void *arg)
 {
     BaseType_t need_yield = pdFALSE;
